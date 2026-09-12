@@ -1,6 +1,16 @@
-// Backend socket plus the Vonage session and audio mixing.
+// Backend socket plus a peer to peer video call.
 //
-// connectBackend now takes a room code, so two groups never share a look.
+// No third party video service. Signalling rides the websocket we already
+// have per room, and the media goes directly between browsers over WebRTC.
+// A public STUN server handles address discovery; on the same network, or on
+// localhost, that is all you need.
+
+const ICE = {
+  iceServers: [
+    { urls: "stun:stun.l.google.com:19302" },
+    { urls: "stun:stun1.l.google.com:19302" },
+  ],
+};
 
 export function connectBackend(code, onMessage) {
   const base = import.meta.env.VITE_API || "ws://localhost:8000/ws";
@@ -9,86 +19,110 @@ export function connectBackend(code, onMessage) {
   return ws;
 }
 
-// --------------------------------------------------------------------
-// Vonage. Everything below joinRoom is SDK-agnostic and only needs a
-// MediaStream per participant.
-// --------------------------------------------------------------------
+/**
+ * Starts the call. Returns { stop, stream }.
+ *
+ * onRemote(stream)  fires when the other person's video arrives
+ * onStatus(text)    "waiting" | "connecting" | "live" | "alone"
+ */
+export async function startCall(ws, { onLocal, onRemote, onStatus }) {
+  let pc = null;
+  let local = null;
 
-export async function joinRoom({ apiKey, sessionId, token, onStream, publisherEl, subscriberEl }) {
-  const OT = window.OT;
-  if (!OT) throw new Error("Vonage SDK not loaded");
-
-  const session = OT.initSession(apiKey, sessionId);
-
-  session.on("streamCreated", (event) => {
-    const subscriber = session.subscribe(event.stream, subscriberEl, {
-      insertMode: "replace",
-      width: "100%",
-      height: "100%",
+  try {
+    local = await navigator.mediaDevices.getUserMedia({
+      video: { width: 640, height: 640, facingMode: "user" },
+      audio: true,
     });
-    subscriber.on("videoElementCreated", (e) => {
-      const stream = e.element.srcObject;
-      if (stream) onStream(stream);
-    });
-  });
+  } catch (err) {
+    onStatus?.("nocam");
+    throw err;
+  }
 
-  await new Promise((resolve, reject) => {
-    session.connect(token, (err) => (err ? reject(err) : resolve()));
-  });
+  onLocal?.(local);
+  onStatus?.("waiting");
 
-  const publisher = OT.initPublisher(publisherEl, {
-    insertMode: "replace",
-    width: "100%",
-    height: "100%",
-  });
-  session.publish(publisher);
+  function fresh() {
+    const conn = new RTCPeerConnection(ICE);
+    local.getTracks().forEach((t) => conn.addTrack(t, local));
 
-  const local = await navigator.mediaDevices.getUserMedia({ audio: true });
-  onStream(local);
+    conn.onicecandidate = (e) => {
+      if (e.candidate) {
+        send({ kind: "ice", candidate: e.candidate });
+      }
+    };
 
-  return session;
-}
+    conn.ontrack = (e) => {
+      onRemote?.(e.streams[0]);
+      onStatus?.("live");
+    };
 
-// --------------------------------------------------------------------
-// Audio mixing: the whole room as one stream, which is what Gemini needs
-// in order to follow who is answering whom.
-// --------------------------------------------------------------------
+    conn.onconnectionstatechange = () => {
+      if (conn.connectionState === "connected") onStatus?.("live");
+      if (["disconnected", "failed", "closed"].includes(conn.connectionState)) {
+        onStatus?.("waiting");
+      }
+    };
 
-export function createMixer(ws) {
-  const ctx = new AudioContext({ sampleRate: 16000 });
-  const merger = ctx.createGain();
-  const processor = ctx.createScriptProcessor(4096, 1, 1);
+    return conn;
+  }
 
-  processor.onaudioprocess = (e) => {
-    if (ws.readyState !== WebSocket.OPEN) return;
+  function send(payload) {
+    if (ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "signal", ...payload }));
+    }
+  }
 
-    const input = e.inputBuffer.getChannelData(0);
-    const pcm = new Int16Array(input.length);
-    for (let i = 0; i < input.length; i++) {
-      const s = Math.max(-1, Math.min(1, input[i]));
-      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
+  async function makeOffer() {
+    pc = fresh();
+    onStatus?.("connecting");
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    send({ kind: "offer", sdp: pc.localDescription });
+  }
+
+  async function handle(msg) {
+    if (msg.type === "peer-joined") {
+      // We were here first, so we make the offer.
+      await makeOffer();
+      return;
     }
 
-    const bytes = new Uint8Array(pcm.buffer);
-    let binary = "";
-    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    if (msg.type === "peer-left") {
+      pc?.close();
+      pc = null;
+      onRemote?.(null);
+      onStatus?.("waiting");
+      return;
+    }
 
-    ws.send(JSON.stringify({ type: "audio", pcm: btoa(binary) }));
-  };
+    if (msg.type !== "signal") return;
 
-  merger.connect(processor);
-
-  // A muted sink keeps the processor pulling without the room hearing itself.
-  const silent = ctx.createGain();
-  silent.gain.value = 0;
-  processor.connect(silent);
-  silent.connect(ctx.destination);
+    if (msg.kind === "offer") {
+      pc?.close();
+      pc = fresh();
+      onStatus?.("connecting");
+      await pc.setRemoteDescription(msg.sdp);
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      send({ kind: "answer", sdp: pc.localDescription });
+    } else if (msg.kind === "answer" && pc) {
+      await pc.setRemoteDescription(msg.sdp);
+    } else if (msg.kind === "ice" && pc) {
+      try {
+        await pc.addIceCandidate(msg.candidate);
+      } catch {
+        /* candidates can arrive before the description; safe to drop */
+      }
+    }
+  }
 
   return {
-    addStream(stream) {
-      if (!stream.getAudioTracks().length) return;
-      ctx.createMediaStreamSource(stream).connect(merger);
+    handle,
+    stream: local,
+    stop() {
+      pc?.close();
+      local.getTracks().forEach((t) => t.stop());
     },
-    resume: () => ctx.resume(),
   };
 }

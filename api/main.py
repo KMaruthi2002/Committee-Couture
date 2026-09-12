@@ -1,8 +1,9 @@
 """
 Backend for Committee Couture.
 
-Rooms are keyed by code. Each room holds its own look, its own subject photo,
-and its own clients, so two groups can run at once without collision.
+Rooms hold their own look, subject photo and clients. The websocket also
+relays WebRTC signalling between peers in the same room, so the video call
+runs peer to peer with no third party service involved.
 """
 
 import asyncio
@@ -51,9 +52,11 @@ class Room:
         self.images = []
         self.history = []
 
-    async def broadcast(self, message: dict) -> None:
+    async def broadcast(self, message: dict, skip: WebSocket | None = None) -> None:
         dead = []
         for ws in self.clients:
+            if ws is skip:
+                continue
             try:
                 await ws.send_text(json.dumps(message))
             except Exception:
@@ -95,10 +98,6 @@ def get_room(code: str) -> Room:
 
 @app.post("/photo/{code}")
 async def set_photo(code: str, request: Request) -> dict:
-    """
-    Accepts {"image": "<base64 jpeg>"} from an upload or a webcam capture,
-    or {"sample": true} to fall back to the bundled photo.
-    """
     room = get_room(code)
     body = await request.json()
 
@@ -228,13 +227,19 @@ def mock_understand(text: str, speaker: str) -> list[tuple[str, dict]]:
 
 
 # ---------------------------------------------------------------------
-# Websocket, per room
+# Websocket: state, plus WebRTC signalling relay
 # ---------------------------------------------------------------------
 
 @app.websocket("/ws/{code}")
 async def ws_endpoint(ws: WebSocket, code: str) -> None:
     await ws.accept()
     room = get_room(code)
+
+    # Tell whoever is already here that someone new arrived. They will make
+    # the offer, so the newcomer just waits.
+    if room.clients:
+        await room.broadcast({"type": "peer-joined"})
+
     room.clients.add(ws)
     await room.push()
 
@@ -255,7 +260,11 @@ async def ws_endpoint(ws: WebSocket, code: str) -> None:
             msg = json.loads(await ws.receive_text())
             kind = msg.get("type")
 
-            if kind == "audio" and live:
+            if kind == "signal":
+                # Straight relay to the other peers in this room.
+                await room.broadcast(msg, skip=ws)
+
+            elif kind == "audio" and live:
                 await live.send_audio(base64.b64decode(msg["pcm"]))
 
             elif kind == "say":
@@ -279,6 +288,7 @@ async def ws_endpoint(ws: WebSocket, code: str) -> None:
         pass
     finally:
         room.clients.discard(ws)
+        await room.broadcast({"type": "peer-left"})
         if live:
             await live.close()
 

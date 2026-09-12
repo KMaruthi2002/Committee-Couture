@@ -1,8 +1,7 @@
 import { useEffect, useRef, useState } from "react";
-import { connectBackend, createMixer, joinRoom } from "./call";
+import { connectBackend, startCall } from "./call";
 import "./styles.css";
 
-const MOCK = import.meta.env.VITE_MOCK !== "0";
 const HTTP = (import.meta.env.VITE_API || "ws://localhost:8000/ws")
   .replace(/^ws/, "http")
   .replace(/\/ws$/, "");
@@ -73,8 +72,6 @@ function Entry({ onEnter }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Subject picker                                                     */
-/* ------------------------------------------------------------------ */
 
 function SubjectPicker({ code, onDone }) {
   const [mode, setMode] = useState("choose");
@@ -102,7 +99,7 @@ function SubjectPicker({ code, onDone }) {
       if (!res.ok) throw new Error(res.statusText);
       stopCamera();
       onDone();
-    } catch (e) {
+    } catch {
       setError("That didn't upload. Try again, or use the sample photo.");
       setBusy(false);
     }
@@ -130,14 +127,12 @@ function SubjectPicker({ code, onDone }) {
   function capture() {
     const video = videoEl.current;
     if (!video) return;
-    const side = Math.min(video.videoWidth, video.videoHeight);
     const canvas = document.createElement("canvas");
     canvas.width = 900;
     canvas.height = 1125;
     const ctx = canvas.getContext("2d");
-    // Centre crop to a 4:5 portrait so the framing matches what the model expects.
-    const cropW = side;
-    const cropH = side * 1.25 > video.videoHeight ? video.videoHeight : side * 1.25;
+    const cropW = Math.min(video.videoWidth, video.videoHeight * 0.8);
+    const cropH = cropW * 1.25;
     ctx.drawImage(
       video,
       (video.videoWidth - cropW) / 2, (video.videoHeight - cropH) / 2,
@@ -168,24 +163,18 @@ function SubjectPicker({ code, onDone }) {
             </button>
             <button onClick={() => { stopCamera(); setMode("choose"); }}>Back</button>
           </div>
-          <p className="hint">Stand back a little. Head and shoulders, plain wall if you can.</p>
+          <p className="hint">Head and shoulders, plain wall if you can find one.</p>
         </>
       ) : (
         <>
-          <p className="hint">
-            A head-and-shoulders shot works best. Plain background, even light.
-          </p>
+          <p className="hint">A head-and-shoulders shot works best. Even light, plain background.</p>
           <div className="subject-actions">
-            <button className="primary" onClick={openCamera} disabled={busy}>
-              Use the camera
-            </button>
+            <button className="primary" onClick={openCamera} disabled={busy}>Use the camera</button>
             <label className="filebtn">
               Upload a photo
               <input type="file" accept="image/*" onChange={onFile} disabled={busy} />
             </label>
-            <button onClick={() => send({ sample: true })} disabled={busy}>
-              Use the sample
-            </button>
+            <button onClick={() => send({ sample: true })} disabled={busy}>Use the sample</button>
           </div>
         </>
       )}
@@ -196,8 +185,14 @@ function SubjectPicker({ code, onDone }) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Studio                                                             */
-/* ------------------------------------------------------------------ */
+
+const STATUS = {
+  waiting: "waiting for the committee",
+  connecting: "connecting",
+  live: "live",
+  nocam: "no camera",
+  alone: "just you",
+};
 
 function Studio({ name, code }) {
   const [look, setLook] = useState({
@@ -208,14 +203,18 @@ function Studio({ name, code }) {
   const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
   const [changing, setChanging] = useState(false);
+  const [callStatus, setCallStatus] = useState("waiting");
 
   const ws = useRef(null);
-  const publisherEl = useRef(null);
-  const subscriberEl = useRef(null);
+  const callRef = useRef(null);
+  const localEl = useRef(null);
+  const remoteEl = useRef(null);
   const feedEl = useRef(null);
 
   useEffect(() => {
     ws.current = connectBackend(code, (msg) => {
+      callRef.current?.handle(msg);
+
       if (msg.type === "state") {
         setLook(msg);
         setRendering(false);
@@ -227,17 +226,19 @@ function Studio({ name, code }) {
       }
     });
 
-    if (!MOCK) {
-      const mixer = createMixer(ws.current);
-      joinRoom({
-        apiKey: import.meta.env.VITE_VONAGE_KEY,
-        sessionId: import.meta.env.VITE_VONAGE_SESSION,
-        token: import.meta.env.VITE_VONAGE_TOKEN,
-        onStream: mixer.addStream,
-        publisherEl: publisherEl.current,
-        subscriberEl: subscriberEl.current,
-      }).then(mixer.resume).catch((e) => console.error("vonage", e));
-    }
+    startCall(ws.current, {
+      onLocal: (stream) => {
+        if (localEl.current) localEl.current.srcObject = stream;
+      },
+      onRemote: (stream) => {
+        if (remoteEl.current) remoteEl.current.srcObject = stream;
+      },
+      onStatus: setCallStatus,
+    })
+      .then((call) => { callRef.current = call; })
+      .catch(() => setCallStatus("nocam"));
+
+    return () => callRef.current?.stop();
   }, []);
 
   useEffect(() => {
@@ -268,12 +269,11 @@ function Studio({ name, code }) {
     <div className="studio">
       <header className="bar">
         <p className="wordmark small">Committee Couture</p>
+        <span className={`dot ${callStatus}`} />
+        <span className="who">{STATUS[callStatus]}</span>
         <button className="room" onClick={copyCode}>
           {copied ? "Code copied" : `Room ${code}`}
         </button>
-        <span className="who">
-          {look.people} {look.people === 1 ? "person" : "people"} in the room
-        </span>
       </header>
 
       <main className="canvas">
@@ -304,14 +304,22 @@ function Studio({ name, code }) {
 
       <aside className="rail">
         <section className="video">
-          <div ref={publisherEl} className="tile">{MOCK && <span>you</span>}</div>
-          <div ref={subscriberEl} className="tile">{MOCK && <span>the committee</span>}</div>
+          <div className="tile">
+            <video ref={localEl} muted playsInline autoPlay />
+            <span className="label">{name}</span>
+          </div>
+          <div className="tile">
+            <video ref={remoteEl} playsInline autoPlay />
+            <span className="label">
+              {callStatus === "live" ? "the committee" : "empty chair"}
+            </span>
+          </div>
         </section>
 
         <section className="pane">
           <h2>The look</h2>
           {look.layers.length === 0 ? (
-            <p className="muted">Nothing yet.</p>
+            <p className="muted">Nothing yet. Name a garment below.</p>
           ) : (
             <ul className="layers">
               {look.layers.map((l) => (

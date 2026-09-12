@@ -1,0 +1,191 @@
+/*
+  Built to be read across a room off a projector, in a dim venue.
+
+  Two decisions worth keeping. The portrait is the only bright thing on screen,
+  so the eye goes there without being directed. And the layer list puts the
+  proposer's name on every line, because whose idea it was is the emotional
+  content of this product, not metadata.
+*/
+
+:root {
+  --ink: #14171a;
+  --ink-soft: #1d2125;
+  --line: #2b3137;
+  --text: #e8e6e1;
+  --text-dim: #93999e;
+  --sage: #7d9471;
+  --radius: 6px;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ink);
+  color: var(--text);
+  font-family: ui-sans-serif, system-ui, "Segoe UI", Helvetica, sans-serif;
+  font-size: 17px;
+  line-height: 1.5;
+}
+
+.room {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  min-height: 100vh;
+}
+
+/* ---- stage ---- */
+
+.stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 32px;
+  position: relative;
+}
+
+.looks {
+  display: flex;
+  gap: 20px;
+  max-height: 78vh;
+}
+
+.look {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.look img {
+  max-height: 70vh;
+  max-width: 100%;
+  border-radius: var(--radius);
+  display: block;
+}
+
+.looks-split .look img { max-height: 58vh; }
+
+.look figcaption {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 15px;
+  color: var(--text-dim);
+}
+
+.working {
+  position: absolute;
+  top: 28px;
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-dim);
+}
+
+.heard {
+  margin: 0;
+  font-size: 19px;
+  color: var(--sage);
+}
+
+.empty { color: var(--text-dim); font-size: 19px; }
+.empty-small { color: var(--text-dim); font-size: 15px; }
+
+/* ---- panel ---- */
+
+.panel {
+  background: var(--ink-soft);
+  border-left: 1px solid var(--line);
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.panel h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 500;
+}
+
+.layers {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.layers li {
+  display: grid;
+  gap: 2px;
+  padding-left: 12px;
+  border-left: 2px solid var(--sage);
+}
+
+.item { font-size: 17px; }
+.attrs { font-size: 15px; color: var(--text-dim); }
+.by { font-size: 14px; color: var(--sage); }
+
+.split {
+  margin: 0;
+  font-size: 15px;
+  color: var(--text-dim);
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+
+/* ---- video ---- */
+
+.video { display: grid; gap: 8px; }
+.tile, .tiles { background: #000; border-radius: var(--radius); min-height: 90px; }
+
+/* ---- composer ---- */
+
+.composer {
+  margin-top: auto;
+  display: flex;
+  gap: 8px;
+}
+
+.composer input {
+  flex: 1;
+  min-width: 0;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 10px 12px;
+  font: inherit;
+  font-size: 15px;
+}
+
+.composer input:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--sage);
+  outline-offset: 2px;
+}
+
+button {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--text);
+  padding: 10px 14px;
+  font: inherit;
+  font-size: 15px;
+  cursor: pointer;
+}
+
+button:hover { border-color: var(--sage); }
+
+@media (max-width: 900px) {
+  .room { grid-template-columns: 1fr; }
+  .panel { border-left: none; border-top: 1px solid var(--line); }
+}

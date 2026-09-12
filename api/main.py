@@ -54,7 +54,7 @@ class Room:
 
     async def broadcast(self, message: dict, skip: WebSocket | None = None) -> None:
         dead = []
-        for ws in self.clients:
+        for ws in list(self.clients):
             if ws is skip:
                 continue
             try:

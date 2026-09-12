@@ -1,0 +1,16 @@
+[build]
+  base = "web"
+  command = "npm run build"
+  publish = "dist"
+
+# Single page app: every path serves index.html.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Camera and microphone need to be permitted for the embedded video call.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    Permissions-Policy = "camera=(self), microphone=(self)"

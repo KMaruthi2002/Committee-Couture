@@ -412,3 +412,22 @@ figcaption {
     transition-duration: 0.01ms !important;
   }
 }
+/* Append to styles.css: Vonage inserts its own nodes into the tiles. */
+
+.tile > div,
+.tile > div > video,
+.tile .OT_widget-container,
+.tile video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+  display: block;
+  background: transparent !important;
+}
+
+.tile .OT_bar,
+.tile .OT_edge-bar-item,
+.tile .OT_mute { display: none !important; }
+
+.tile .OT_video-poster,
+.tile .OT_audio-level-meter { display: none !important; }

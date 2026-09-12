@@ -227,12 +227,8 @@ function Studio({ name, code }) {
     });
 
     startCall(ws.current, {
-      onLocal: (stream) => {
-        if (localEl.current) localEl.current.srcObject = stream;
-      },
-      onRemote: (stream) => {
-        if (remoteEl.current) remoteEl.current.srcObject = stream;
-      },
+      localEl: localEl.current,
+      remoteEl: remoteEl.current,
       onStatus: setCallStatus,
     })
       .then((call) => { callRef.current = call; })
@@ -305,11 +301,11 @@ function Studio({ name, code }) {
       <aside className="rail">
         <section className="video">
           <div className="tile">
-            <video ref={localEl} muted playsInline autoPlay />
+            <div ref={localEl} className="feed-slot" />
             <span className="label">{name}</span>
           </div>
           <div className="tile">
-            <video ref={remoteEl} playsInline autoPlay />
+            <div ref={remoteEl} className="feed-slot" />
             <span className="label">
               {callStatus === "live" ? "the committee" : "empty chair"}
             </span>

@@ -1,16 +1,7 @@
-// Backend socket plus a peer to peer video call.
+// Backend socket plus the Vonage Video call.
 //
-// No third party video service. Signalling rides the websocket we already
-// have per room, and the media goes directly between browsers over WebRTC.
-// A public STUN server handles address discovery; on the same network, or on
-// localhost, that is all you need.
-
-const ICE = {
-  iceServers: [
-    { urls: "stun:stun.l.google.com:19302" },
-    { urls: "stun:stun1.l.google.com:19302" },
-  ],
-};
+// Vonage inserts its own video elements into container nodes, so App.jsx
+// passes the tile divs rather than <video> refs.
 
 export function connectBackend(code, onMessage) {
   const base = import.meta.env.VITE_API || "ws://localhost:8000/ws";
@@ -20,109 +11,88 @@ export function connectBackend(code, onMessage) {
 }
 
 /**
- * Starts the call. Returns { stop, stream }.
+ * Joins the Vonage session.
  *
- * onRemote(stream)  fires when the other person's video arrives
- * onStatus(text)    "waiting" | "connecting" | "live" | "alone"
+ * localEl / remoteEl  container DOM nodes
+ * onStatus(text)      "waiting" | "connecting" | "live" | "nocam" | "error"
  */
-export async function startCall(ws, { onLocal, onRemote, onStatus }) {
-  let pc = null;
-  let local = null;
-
-  try {
-    local = await navigator.mediaDevices.getUserMedia({
-      video: { width: 640, height: 640, facingMode: "user" },
-      audio: true,
-    });
-  } catch (err) {
-    onStatus?.("nocam");
-    throw err;
+export async function startCall(_ws, { localEl, remoteEl, onStatus }) {
+  const OT = window.OT;
+  if (!OT) {
+    onStatus?.("error");
+    throw new Error("Vonage SDK not loaded. Check the script tag in index.html.");
   }
 
-  onLocal?.(local);
-  onStatus?.("waiting");
+  const appId = import.meta.env.VITE_VONAGE_KEY;
+  const sessionId = import.meta.env.VITE_VONAGE_SESSION;
+  const token = import.meta.env.VITE_VONAGE_TOKEN;
 
-  function fresh() {
-    const conn = new RTCPeerConnection(ICE);
-    local.getTracks().forEach((t) => conn.addTrack(t, local));
-
-    conn.onicecandidate = (e) => {
-      if (e.candidate) {
-        send({ kind: "ice", candidate: e.candidate });
-      }
-    };
-
-    conn.ontrack = (e) => {
-      onRemote?.(e.streams[0]);
-      onStatus?.("live");
-    };
-
-    conn.onconnectionstatechange = () => {
-      if (conn.connectionState === "connected") onStatus?.("live");
-      if (["disconnected", "failed", "closed"].includes(conn.connectionState)) {
-        onStatus?.("waiting");
-      }
-    };
-
-    return conn;
+  if (!appId || !sessionId || !token) {
+    onStatus?.("error");
+    throw new Error("Missing Vonage credentials in web/.env");
   }
 
-  function send(payload) {
-    if (ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: "signal", ...payload }));
-    }
-  }
+  onStatus?.("connecting");
 
-  async function makeOffer() {
-    pc = fresh();
-    onStatus?.("connecting");
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-    send({ kind: "offer", sdp: pc.localDescription });
-  }
+  const session = OT.initSession(appId, sessionId);
+  let subscriber = null;
 
-  async function handle(msg) {
-    if (msg.type === "peer-joined") {
-      // We were here first, so we make the offer.
-      await makeOffer();
-      return;
-    }
+  session.on("streamCreated", (event) => {
+    subscriber = session.subscribe(
+      event.stream,
+      remoteEl,
+      { insertMode: "append", width: "100%", height: "100%", showControls: false },
+      (err) => onStatus?.(err ? "error" : "live")
+    );
+  });
 
-    if (msg.type === "peer-left") {
-      pc?.close();
-      pc = null;
-      onRemote?.(null);
-      onStatus?.("waiting");
-      return;
-    }
+  session.on("streamDestroyed", () => {
+    subscriber = null;
+    onStatus?.("waiting");
+  });
 
-    if (msg.type !== "signal") return;
+  session.on("sessionDisconnected", () => onStatus?.("waiting"));
 
-    if (msg.kind === "offer") {
-      pc?.close();
-      pc = fresh();
-      onStatus?.("connecting");
-      await pc.setRemoteDescription(msg.sdp);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      send({ kind: "answer", sdp: pc.localDescription });
-    } else if (msg.kind === "answer" && pc) {
-      await pc.setRemoteDescription(msg.sdp);
-    } else if (msg.kind === "ice" && pc) {
-      try {
-        await pc.addIceCandidate(msg.candidate);
-      } catch {
-        /* candidates can arrive before the description; safe to drop */
+  await new Promise((resolve, reject) => {
+    session.connect(token, (err) => (err ? reject(err) : resolve()));
+  });
+
+  const publisher = OT.initPublisher(
+    localEl,
+    {
+      insertMode: "append",
+      width: "100%",
+      height: "100%",
+      showControls: false,
+      // Audio published for the call; the design prompts come from the
+      // browser's own speech recognition, which uses a separate mic handle.
+      publishAudio: true,
+      publishVideo: true,
+      mirror: true,
+    },
+    (err) => {
+      if (err) {
+        onStatus?.("nocam");
+      } else {
+        onStatus?.(subscriber ? "live" : "waiting");
       }
     }
-  }
+  );
+
+  session.publish(publisher);
 
   return {
-    handle,
-    stream: local,
+    // Kept so App.jsx can pass websocket messages in without caring which
+    // video backend is running. Vonage handles its own signalling.
+    handle() {},
     stop() {
-      pc?.close();
-      local.getTracks().forEach((t) => t.stop());
+      try {
+        session.unpublish(publisher);
+        publisher.destroy();
+        session.disconnect();
+      } catch {
+        /* already torn down */
+      }
     },
   };
 }

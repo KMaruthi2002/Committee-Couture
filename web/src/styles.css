@@ -431,3 +431,40 @@ figcaption {
 
 .tile .OT_video-poster,
 .tile .OT_audio-level-meter { display: none !important; }
+/* Append to styles.css: leave button and connection banner. */
+
+.back {
+  font-size: 13px;
+  padding: 7px 13px;
+  color: var(--dim);
+  margin-right: 4px;
+}
+
+.net {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 9px 24px;
+  font-size: 13px;
+  letter-spacing: 0.03em;
+  color: var(--clay);
+  background: rgba(221, 156, 120, 0.08);
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.studio {
+  grid-template-areas:
+    "bar bar"
+    "net net"
+    "canvas rail";
+  grid-template-rows: auto auto 1fr;
+}
+
+.bar { grid-area: bar; }
+.net { grid-area: net; }
+
+@media (max-width: 980px) {
+  .studio {
+    grid-template-areas: "bar" "net" "canvas" "rail";
+    grid-template-rows: auto auto auto 1fr;
+  }
+}

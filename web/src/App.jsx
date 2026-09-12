@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { connectBackend, startCall } from "./call";
+import { startListening } from "./speech";
 import "./styles.css";
 
 const HTTP = (import.meta.env.VITE_API || "ws://localhost:8000/ws")
@@ -15,7 +16,9 @@ function randomCode() {
 
 export default function App() {
   const [session, setSession] = useState(null);
-  return session ? <Studio {...session} /> : <Entry onEnter={setSession} />;
+  return session
+    ? <Studio key={session.code} {...session} onLeave={() => setSession(null)} />
+    : <Entry onEnter={setSession} />;
 }
 
 /* ------------------------------------------------------------------ */
@@ -44,7 +47,7 @@ function Entry({ onEnter }) {
         <p className="wordmark">Committee Couture</p>
         <h1>Couture is one designer<br />and one client.</h1>
         <p className="lede">
-          We made it a room full of your friends. Bring them in, argue about
+          We made it a room full of your friends. Get on the call, argue about
           the buttons, and watch the look change while you talk.
         </p>
 
@@ -100,7 +103,7 @@ function SubjectPicker({ code, onDone }) {
       stopCamera();
       onDone();
     } catch {
-      setError("That didn't upload. Try again, or use the sample photo.");
+      setError("That didn't upload. The server may still be waking up, give it a moment and try again.");
       setBusy(false);
     }
   }
@@ -186,15 +189,21 @@ function SubjectPicker({ code, onDone }) {
 
 /* ------------------------------------------------------------------ */
 
-const STATUS = {
+const CALL_STATUS = {
   waiting: "waiting for the committee",
   connecting: "connecting",
-  live: "live",
+  live: "on the call",
   nocam: "no camera",
-  alone: "just you",
+  error: "call unavailable",
 };
 
-function Studio({ name, code }) {
+const NET_STATUS = {
+  connecting: "connecting to the studio",
+  retrying: "reconnecting, the server may be waking up",
+  open: null,
+};
+
+function Studio({ name, code, onLeave }) {
   const [look, setLook] = useState({
     layers: [], images: [], contested: null, history: [], people: 1, hasPhoto: false,
   });
@@ -203,28 +212,34 @@ function Studio({ name, code }) {
   const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
   const [changing, setChanging] = useState(false);
-  const [callStatus, setCallStatus] = useState("waiting");
+  const [callStatus, setCallStatus] = useState("connecting");
+  const [netStatus, setNetStatus] = useState("connecting");
+  const [micStatus, setMicStatus] = useState("off");
+  const [heard, setHeard] = useState("");
 
   const ws = useRef(null);
   const callRef = useRef(null);
+  const micRef = useRef(null);
   const localEl = useRef(null);
   const remoteEl = useRef(null);
   const feedEl = useRef(null);
 
   useEffect(() => {
-    ws.current = connectBackend(code, (msg) => {
-      callRef.current?.handle(msg);
-
-      if (msg.type === "state") {
-        setLook(msg);
-        setRendering(false);
-        if (msg.pending) setAck(msg.pending);
-      } else if (msg.type === "rendering") {
-        setRendering(true);
-      } else if (msg.type === "ack") {
-        setAck(msg.text);
-      }
-    });
+    ws.current = connectBackend(
+      code,
+      (msg) => {
+        if (msg.type === "state") {
+          setLook(msg);
+          setRendering(false);
+          if (msg.pending) setAck(msg.pending);
+        } else if (msg.type === "rendering") {
+          setRendering(true);
+        } else if (msg.type === "ack") {
+          setAck(msg.text);
+        }
+      },
+      setNetStatus
+    );
 
     startCall(ws.current, {
       localEl: localEl.current,
@@ -232,14 +247,36 @@ function Studio({ name, code }) {
       onStatus: setCallStatus,
     })
       .then((call) => { callRef.current = call; })
-      .catch(() => setCallStatus("nocam"));
+      .catch(() => setCallStatus("error"));
 
-    return () => callRef.current?.stop();
-  }, []);
+    return () => {
+      callRef.current?.stop();
+      micRef.current?.stop();
+      ws.current?.close();
+    };
+  }, [code]);
 
   useEffect(() => {
     if (feedEl.current) feedEl.current.scrollTop = feedEl.current.scrollHeight;
   }, [look.history]);
+
+  function toggleMic() {
+    if (micRef.current?.supported && micStatus === "listening") {
+      micRef.current.stop();
+      setMicStatus("off");
+      setHeard("");
+      return;
+    }
+    if (micRef.current?.supported) {
+      micRef.current.resume();
+      setMicStatus("listening");
+      return;
+    }
+    micRef.current = startListening(ws.current, name, {
+      onHeard: (text, final) => setHeard(final ? "" : text),
+      onStatus: setMicStatus,
+    });
+  }
 
   function say(e) {
     e.preventDefault();
@@ -258,19 +295,35 @@ function Studio({ name, code }) {
     setTimeout(() => setCopied(false), 1600);
   }
 
+  function leave() {
+    callRef.current?.stop();
+    micRef.current?.stop();
+    ws.current?.close();
+    onLeave();
+  }
+
   const needsPhoto = !look.hasPhoto || changing;
   const twoUp = look.images.length > 1;
+  const listening = micStatus === "listening";
+  const netMessage = NET_STATUS[netStatus];
 
   return (
     <div className="studio">
       <header className="bar">
+        <button className="back" onClick={leave} title="Leave the room">Leave</button>
         <p className="wordmark small">Committee Couture</p>
         <span className={`dot ${callStatus}`} />
-        <span className="who">{STATUS[callStatus]}</span>
+        <span className="who">{CALL_STATUS[callStatus]}</span>
+        <button className={`mic ${listening ? "on" : ""}`} onClick={toggleMic}>
+          {listening ? "Listening" : micStatus === "denied" ? "Mic blocked"
+            : micStatus === "unsupported" ? "Mic unsupported" : "Start listening"}
+        </button>
         <button className="room" onClick={copyCode}>
           {copied ? "Code copied" : `Room ${code}`}
         </button>
       </header>
+
+      {netMessage && <p className="net">{netMessage}</p>}
 
       <main className="canvas">
         {needsPhoto ? (
@@ -293,7 +346,7 @@ function Studio({ name, code }) {
               ))}
               {rendering && <p className="working">Working on it</p>}
             </div>
-            {ack && <p className="ack">{ack}</p>}
+            {heard ? <p className="heard">{heard}</p> : ack && <p className="ack">{ack}</p>}
           </>
         )}
       </main>
@@ -315,7 +368,7 @@ function Studio({ name, code }) {
         <section className="pane">
           <h2>The look</h2>
           {look.layers.length === 0 ? (
-            <p className="muted">Nothing yet. Name a garment below.</p>
+            <p className="muted">Nothing yet. Say a garment out loud.</p>
           ) : (
             <ul className="layers">
               {look.layers.map((l) => (
@@ -357,7 +410,7 @@ function Studio({ name, code }) {
 
         <form onSubmit={say} className="composer">
           <input value={draft} onChange={(e) => setDraft(e.target.value)}
-            placeholder="a beige beret tilted to the left" />
+            placeholder="or type it" />
           <button type="submit">Say it</button>
         </form>
       </aside>

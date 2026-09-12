@@ -1,4 +1,4 @@
-# Second opinion
+# Committee Couture
 
 A group video call where friends style one person, and the picture changes as
 they talk. The AI is not the stylist. They are.

@@ -1,23 +1,17 @@
-// Vonage session plus the audio mixing that feeds Gemini.
+// Backend socket plus the Vonage session and audio mixing.
 //
-// The mixing is the part worth reading. Gemini needs to hear the whole room as
-// one conversation, not four separate streams, otherwise it cannot follow who
-// is answering whom. So the host subscribes to everyone, merges every inbound
-// track plus its own mic into a single node, and ships 16kHz mono PCM up.
+// connectBackend now takes a room code, so two groups never share a look.
 
-const API = import.meta.env.VITE_API || "ws://localhost:8000/ws";
-
-export function connectBackend(onMessage) {
-  const ws = new WebSocket(API);
+export function connectBackend(code, onMessage) {
+  const base = import.meta.env.VITE_API || "ws://localhost:8000/ws";
+  const ws = new WebSocket(`${base}/${encodeURIComponent(code)}`);
   ws.onmessage = (e) => onMessage(JSON.parse(e.data));
-  ws.onclose = () => setTimeout(() => connectBackend(onMessage), 1500);
   return ws;
 }
 
 // --------------------------------------------------------------------
-// SEAM 3: Vonage
-// Everything below joinRoom() is SDK-agnostic. It only needs a MediaStream
-// per participant, however you obtain it.
+// Vonage. Everything below joinRoom is SDK-agnostic and only needs a
+// MediaStream per participant.
 // --------------------------------------------------------------------
 
 export async function joinRoom({ apiKey, sessionId, token, onStream, publisherEl, subscriberEl }) {
@@ -28,11 +22,10 @@ export async function joinRoom({ apiKey, sessionId, token, onStream, publisherEl
 
   session.on("streamCreated", (event) => {
     const subscriber = session.subscribe(event.stream, subscriberEl, {
-      insertMode: "append",
+      insertMode: "replace",
       width: "100%",
       height: "100%",
     });
-    // Give the mixer this participant's audio once it is flowing.
     subscriber.on("videoElementCreated", (e) => {
       const stream = e.element.srcObject;
       if (stream) onStream(stream);
@@ -44,7 +37,7 @@ export async function joinRoom({ apiKey, sessionId, token, onStream, publisherEl
   });
 
   const publisher = OT.initPublisher(publisherEl, {
-    insertMode: "append",
+    insertMode: "replace",
     width: "100%",
     height: "100%",
   });
@@ -57,18 +50,13 @@ export async function joinRoom({ apiKey, sessionId, token, onStream, publisherEl
 }
 
 // --------------------------------------------------------------------
-// Audio mixing. Plain Web Audio, no dependencies, works today.
+// Audio mixing: the whole room as one stream, which is what Gemini needs
+// in order to follow who is answering whom.
 // --------------------------------------------------------------------
 
 export function createMixer(ws) {
-  // Asking for 16kHz directly avoids writing a resampler. Browsers honour this
-  // in practice; if one does not, the model still understands the audio, it
-  // just sounds slightly off pitch.
   const ctx = new AudioContext({ sampleRate: 16000 });
   const merger = ctx.createGain();
-
-  // ScriptProcessor is deprecated but it is four lines and it works in every
-  // browser you will meet tomorrow. Move to an AudioWorklet after the demo.
   const processor = ctx.createScriptProcessor(4096, 1, 1);
 
   processor.onaudioprocess = (e) => {
@@ -81,15 +69,16 @@ export function createMixer(ws) {
       pcm[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
     }
 
-    ws.send(JSON.stringify({
-      type: "audio",
-      pcm: btoa(String.fromCharCode(...new Uint8Array(pcm.buffer))),
-    }));
+    const bytes = new Uint8Array(pcm.buffer);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+
+    ws.send(JSON.stringify({ type: "audio", pcm: btoa(binary) }));
   };
 
   merger.connect(processor);
-  // Connecting to destination would echo the room back into the room. A muted
-  // gain node keeps the processor pulling without anyone hearing themselves.
+
+  // A muted sink keeps the processor pulling without the room hearing itself.
   const silent = ctx.createGain();
   silent.gain.value = 0;
   processor.connect(silent);

@@ -133,7 +133,7 @@ class LookState:
             # clothing is right.
             "Preserve the exact framing, crop and aspect ratio of the original "
             "photograph. Do not zoom in, do not recompose, do not change how "
-            "much of the person is visible.",
+            "much of the person is visible. The photograph is cropped at the waist. Do not extend the image, invent legs, feet, or ground, or show any garment that falls below the crop.",
             "",
             "Anything not described above stays as it appears in the original "
             "photograph. Do not add accessories, change the lighting, or alter "

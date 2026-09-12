@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Callable, Awaitable, Optional
 
 IMAGE_MODEL = os.getenv("IMAGE_MODEL", "gemini-3.1-flash-lite-image")
-LIVE_MODEL = os.getenv("LIVE_MODEL", "gemini-live-2.5-flash-preview")
+LIVE_MODEL = os.getenv("LIVE_MODEL", "gemini-3.1-flash-live-preview")
 TEMPERATURE = 0.4   # proven in testing. Higher and the coat changes between runs.
 
 

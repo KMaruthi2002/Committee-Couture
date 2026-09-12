@@ -186,7 +186,7 @@ async def ws_endpoint(ws: WebSocket) -> None:
     await ws.send_text(json.dumps(state.payload(images=last_images)))
 
     live = None
-    if not MOCK:
+    if not MOCK and os.getenv("LIVE", "0") == "1":
         # SEAM 1. Opens the Gemini Live session and pumps tool calls back.
         live = await gemini_client.start_live_session(
             on_tool_call=dispatch_tool_call,
